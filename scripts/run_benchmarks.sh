@@ -1,6 +1,6 @@
 #!/bin/bash
 
-N_SVC=49
+N_SVC=100
 DURATION=900
 INIT_DELAY=200
 
@@ -120,9 +120,11 @@ function install_benchmark() {
     # osm namespace add benchmark
     [ "$mesh" == "istio" ] && \
         kubectl label namespace benchmark istio-injection=enabled
-    [ "$mesh" == "osm"] && osm namespace add benchmark --disable-sidecar-injection
+    [ "$mesh" == "osm" ] && \
+        osm namespace add benchmark --disable-sidecar-injection && \
+        kubectl annotate namespace benchmark openservicemesh.io/sidecar-injection-
 
-    if [ "$mesh" != "bare-metal" && "$mesh" != "osm" ] ; then
+    if [ "$mesh" != "bare-metal" ] && [ "$mesh" != "osm" ] ; then
         helm install benchmark --namespace benchmark \
             --set wrk2.serviceMesh="$mesh" \
             --set wrk2.app.count="$app_count" \
@@ -252,8 +254,91 @@ function delete_istio() {
 }
 # --
 
+function install_osm_policies() {
+    for num in $(seq 0 1 $N_SVC); do
+        {
+            ns=emojivoto-$num
+            echo "Installing policy in $ns"
+
+            kubectl apply -f - <<EOF
+kind: TrafficTarget
+apiVersion: access.smi-spec.io/v1alpha3
+metadata:
+  name: emoji-target
+  namespace: $ns
+spec:
+  destination:
+    kind: ServiceAccount
+    name: emoji
+    namespace: $ns
+  rules:
+  - kind: HTTPRouteGroup
+    name: emoji-routes
+    matches:
+    - emoji-route
+  sources:
+  - kind: ServiceAccount
+    name: web
+    namespace: $ns
+---
+apiVersion: specs.smi-spec.io/v1alpha4
+kind: HTTPRouteGroup
+metadata:
+  name: emoji-routes
+  namespace: $ns
+spec:
+  matches:
+  - name: emoji-route
+    pathRegex: .*
+    methods: ["*"]
+---
+kind: TrafficTarget
+apiVersion: access.smi-spec.io/v1alpha3
+metadata:
+  name: voting-target
+  namespace: $ns
+spec:
+  destination:
+    kind: ServiceAccount
+    name: voting
+    namespace: $ns
+  rules:
+  - kind: HTTPRouteGroup
+    name: voting-routes
+    matches:
+    - voting-route
+  sources:
+  - kind: ServiceAccount
+    name: web
+    namespace: $ns
+---
+apiVersion: specs.smi-spec.io/v1alpha4
+kind: HTTPRouteGroup
+metadata:
+  name: voting-routes
+  namespace: $ns
+spec:
+  matches:
+  - name: voting-route
+    pathRegex: .*
+    methods: ["*"]
+EOF
+
+         } &
+         sleep 0.5
+    done
+
+
+}
+
+
+PER_POD_RPS=25
 function run_benchmarks() {
-    for rps in 4000; do
+    # for svcs in 100 200 400 800 1600; do
+    for svcs in 100; do
+    # for rps in 1000; do
+        N_SVC=$svcs
+        rps=$(expr $N_SVC \* $PER_POD_RPS)
         for repeat in 1; do
 
             echo "########## Run #$repeat w/ $rps RPS"
@@ -263,14 +348,14 @@ function run_benchmarks() {
             # run_bench bare-metal $rps
             # delete_emojivoto
 
-
             echo " +++ OSM benchmark"
 
-            osm install # --set=OpenServiceMesh.injector.autoScale.enable=true \
-                # --set=OpenServiceMesh.osmController.autoScale.enable=true
+            osm install --set=OpenServiceMesh.injector.autoScale.enable=true \
+                --set=OpenServiceMesh.osmController.autoScale.enable=true
             osm namespace add monitoring --disable-sidecar-injection
             kubectl annotate namespace monitoring openservicemesh.io/sidecar-injection-
             install_emojivoto osm
+            install_osm_policies
             run_bench osm $rps
             delete_emojivoto
             osm uninstall -f
