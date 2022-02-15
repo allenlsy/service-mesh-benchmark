@@ -21,7 +21,7 @@ fi
 
 az aks get-credentials --name $CLUSTER -g $RG
 
-az aks nodepool add --cluster-name $CLUSTER --resource-group $RG --name benchmark --labels role=benchmark --node-count 1 --node-vm-size standard_d16a_v4
+az aks nodepool add --cluster-name $CLUSTER --resource-group $RG --name benchmark --labels role=benchmark -min-count 1 --max-count 100 --node-vm-size standard_d16a_v4
 
 az aks nodepool add --cluster-name $CLUSTER --resource-group $RG --name workload --labels role=workload --min-count 1 --max-count 500 --enable-cluster-autoscaler --node-vm-size Standard_DS2_v2
 
